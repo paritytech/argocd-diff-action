@@ -1,0 +1,19 @@
+name: ArgoCD diff
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  argocd-diff:
+    runs-on: ubuntu-latest
+    steps:
+      - name: ArgoCD diff
+        uses: paritytech/argocd-diff-action@main
+        with:
+          argocd_auth_token: ${{ secrets.ARGOCD_AUTH_TOKEN }} # devops team should provide this & set as secret in github (env specific)
+          changed_dirs: "helm/dir1 helm/dir2" # Optional: Specify the directories for diff
+          teleport_token_name: token-for-teleport # ask devops team to provide.
+          teleport_app_name: "${{ vars.ARGOCD_APP_NAME }}" # or argocd-prod, argocd-stg.
+
