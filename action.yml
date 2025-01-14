@@ -1,0 +1,149 @@
+name: "ArgoCD Diff with Teleport Auth"
+description: "Run ArgoCD diff using Teleport authentication"
+
+inputs:
+  argocd_auth_token:
+    description: "ArgoCD authentication token (provided by the DevOps team)"
+    required: true
+  argocd_version:
+    description: "Version of the ArgoCD CLI"
+    required: false
+    default: "v2.11.4"
+  changed_dirs:
+    description: "A newline or space-separated list of changed directories to avoid running a diff against all applications. Only apps with matching REPO and PATH will be diffed."
+    required: false
+    default: "."
+  teleport_proxy_server:
+    description: "Address of the Teleport proxy server"
+    required: false
+    default: "teleport.parity.io:443"
+  teleport_token_name:
+    description: "Name of the Teleport token for authentication. (Request this from the DevOps team; unique per application and not a secret)"
+    required: true
+  teleport_app_name:
+    description: "Name of the Teleport application (e.g., argocd-prod, argocd-stg)"
+    required: true
+  teleport_bin:
+    description: "Teleport binary version"
+    required: false
+    default: "teleport-v16.0.3-linux-amd64-bin.tar.gz"
+  output_file:
+    description: "Path to the generated report file"
+    required: false
+    default: "/tmp/argocd-diff-report.md"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Create Teleport Configuration
+      shell: bash
+      run: |
+        cat << EOF > /tmp/teleport-config.yaml
+        version: v2
+        proxy_server: ${{ inputs.teleport_proxy_server }}
+        onboarding:
+          join_method: github
+          token: ${{ inputs.teleport_token_name }}
+        oneshot: true
+        storage:
+          type: memory
+        outputs:
+          - type: application
+            app_name: ${{ inputs.teleport_app_name }}
+            destination:
+              type: directory
+              path: /tmp/machine-id/${{ inputs.teleport_app_name }}
+        EOF
+
+    - name: ArgoCD diff
+      shell: bash
+      env:
+        ARGOCD_SERVER: ${{ inputs.teleport_app_name }}.${{ inputs.teleport_proxy_server }}
+        ARGOCD_AUTH_TOKEN: ${{ inputs.argocd_auth_token }}
+        CHANGED_DIRS: ${{ inputs.changed_dirs }}
+        TELEPORT_BIN: ${{ inputs.teleport_bin }}
+        ARGOCD_VERSION: ${{ inputs.argocd_version }}
+        KUBECTL_EXTERNAL_DIFF: diff -u
+      id: diff
+      run: |
+        set -e
+
+        TELEPORT_CERTS="/tmp/machine-id/${{ inputs.teleport_app_name }}"
+
+        # Install ArgoCD CLI
+        echo "Installing ArgoCD CLI version ${ARGOCD_VERSION}..."
+        sudo curl -sSL -o /usr/local/bin/argocd https://github.com/argoproj/argo-cd/releases/download/${ARGOCD_VERSION}/argocd-linux-amd64
+        sudo chmod +x /usr/local/bin/argocd
+
+        # Install Teleport CLI
+        echo "Installing Teleport CLI..."
+        curl -L -o /tmp/$TELEPORT_BIN https://get.gravitational.com/$TELEPORT_BIN
+        tar -xzf /tmp/$TELEPORT_BIN -C /tmp
+        sudo mv /tmp/teleport/tctl /tmp/teleport/teleport /tmp/teleport/tbot /usr/local/bin/
+        teleport version
+
+        # Authenticate with Teleport
+        echo "Authenticating with Teleport..."
+        tbot start -c /tmp/teleport-config.yaml
+
+        # ArgoCD Set & Sync
+        ARGOCD_CERTS="--client-crt=$TELEPORT_CERTS/tlscert --client-crt-key=$TELEPORT_CERTS/key"
+        ARGOCD_OPTS="--grpc-web $ARGOCD_CERTS --grpc-web-root-path / --auth-token=$ARGOCD_AUTH_TOKEN"
+
+        echo "Server: $ARGOCD_SERVER"
+        echo "Options: $ARGOCD_OPTS"
+        echo "Changed directories: $CHANGED_DIRS"
+        echo "GITHUB_SHA: $GITHUB_SHA"
+
+        ARGO_APPS_LIST=$(argocd app list $ARGOCD_OPTS)
+        echo "ArgoCD Apps List:"
+        #echo "$ARGO_APPS_LIST"
+        
+        report_dir=$(mktemp -d)
+
+        # Loop through changed directories and run the diff
+        for DIR in ${CHANGED_DIRS}; do
+          ARGO_APPS=$(echo "$ARGO_APPS_LIST" | { grep ${GITHUB_REPOSITORY} | grep $DIR/ || true; } | cut -d' ' -f1)
+          for app in $ARGO_APPS; do
+             echo "########## Diffing $app ##########" 
+             argocd app diff $app --revision ${GITHUB_SHA} --exit-code=false $ARGOCD_OPTS | tee -a ${report_dir}/${app//\//.}
+          done
+        done
+        
+        echo "report_dir=$report_dir" >> $GITHUB_OUTPUT
+
+    - name: Post diff as comment
+      shell: bash
+      env:
+        # GH_TOKEN: ${{ github.token }}
+        ARGOCD_NAME: ${{ inputs.teleport_app_name }}
+        output_file: ${{ inputs.output_file }}
+      run: |
+        sudo apt-get install -qq -y diffstat
+        
+        report_dir=${{ steps.diff.outputs.report_dir }}
+        #ls -lsa $report_dir
+      
+        echo "Generating report..."
+        echo "## Argocd diff Report ($ARGOCD_NAME)"> "$output_file"
+        for file in "$report_dir"/*; do
+            if [ -s "$file" ]; then
+                echo "debug: $file"
+                echo "### $(basename "$file")" >> "$output_file"
+                echo '```bash' >> "$output_file"
+                diffstat "$file" >> "$output_file"
+                echo '```' >> "$output_file"
+                echo "<details>" >> "$output_file"
+                echo "  <summary>Show Output</summary>" >> "$output_file"
+                echo "" >> "$output_file"
+                echo '```diff' >> "$output_file"
+                cat "$file" >> "$output_file"
+                echo '```' >> "$output_file"
+                echo "" >> "$output_file"
+                echo "</details>" >> "$output_file"
+                echo "" >> "$output_file"
+            fi
+        done
+        
+        echo "Report written to $output_file"
+        #cat $output_file
