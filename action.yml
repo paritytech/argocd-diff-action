@@ -126,7 +126,7 @@ runs:
         #ls -lsa $report_dir
       
         echo "Generating report..."
-        echo "## Argocd diff Report ([$ARGOCD_NAME](#$ARGOCD_NAME))"> "$output_file"
+        echo -n ""> "$output_file"
         for file in "$report_dir"/*; do
             if [ -s "$file" ]; then
                 echo "debug: $file"
@@ -146,6 +146,14 @@ runs:
                 echo "" >> "$output_file"
             fi
         done
+        
+        # Check if the report file is not empty and adding a title if needed 
+        if [ -s "$output_file" ]; then
+            sed -i "1i## ArgoCD Diff Report ([$ARGOCD_NAME](#$ARGOCD_NAME))" "$output_file"
+        else
+            echo "Empty report, no changes"
+            echo "<!-- No diff for $ARGOCD_NAME cluster -->" >> "$output_file"
+        fi
         
         echo "Report written to $output_file"
         #cat $output_file
