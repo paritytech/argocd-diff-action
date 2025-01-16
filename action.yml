@@ -118,6 +118,7 @@ runs:
         # GH_TOKEN: ${{ github.token }}
         ARGOCD_NAME: ${{ inputs.teleport_app_name }}
         output_file: ${{ inputs.output_file }}
+        ARGOCD_URL: "https://${{ inputs.teleport_app_name }}.${{ inputs.teleport_proxy_server }}/applications/"
       run: |
         sudo apt-get install -qq -y diffstat
         
@@ -125,11 +126,12 @@ runs:
         #ls -lsa $report_dir
       
         echo "Generating report..."
-        echo "## Argocd diff Report ($ARGOCD_NAME)"> "$output_file"
+        echo "## Argocd diff Report ([$ARGOCD_NAME](#$ARGOCD_NAME))"> "$output_file"
         for file in "$report_dir"/*; do
             if [ -s "$file" ]; then
                 echo "debug: $file"
-                echo "### $(basename "$file")" >> "$output_file"
+                APP=$(basename "$file" | tr "." "/")
+                echo "### [${APP}](${ARGOCD_URL}${APP})" >> "$output_file"
                 echo '```bash' >> "$output_file"
                 diffstat "$file" >> "$output_file"
                 echo '```' >> "$output_file"
