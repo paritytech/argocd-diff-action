@@ -147,7 +147,7 @@ runs:
             fi
         done
         
-        # Check if the report file is not empty and adding a title if needed 
+        # Check if the report file is not empty, and add a title if needed.
         if [ -s "$output_file" ]; then
             sed -i "1i## ArgoCD Diff Report ([$ARGOCD_NAME](#$ARGOCD_NAME))" "$output_file"
         else
